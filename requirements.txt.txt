@@ -1,0 +1,10 @@
+streamlit
+yfinance
+plotly
+pandas
+gspread
+oauth2client
+google-generativeai
+numpy
+scikit-learn
+requests

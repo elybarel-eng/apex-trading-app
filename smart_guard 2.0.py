@@ -1,0 +1,59 @@
+import yfinance as yf
+import pandas as pd
+import requests
+import os
+import google.generativeai as genai
+import time
+
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+WATCHLIST = ["NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "QQQ", "SPY"]
+
+def send_telegram(msg):
+    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", data={"chat_id": CHAT_ID, "text": msg[:4000], "parse_mode": "Markdown"})
+
+def get_ai_analysis(ticker, price, rsi, macd, signal, sma200, atr, upper, lower):
+    try:
+        genai.configure(api_key=GOOGLE_API_KEY)
+        model = genai.GenerativeModel('gemini-pro')
+        prompt = f"""
+        אתה בוט מנהל סיכונים. נתח את {ticker} בעברית:
+        מחיר: ${price:.2f}, RSI: {rsi:.1f}, מגמה (SMA200): ${sma200:.2f}, בולינגר: ${lower:.2f}-${upper:.2f}.
+        1. פסק דין: BULLISH/BEARISH/NEUTRAL.
+        2. תובנה קצרה בעברית על הסיכון.
+        3. סטופ מומלץ (מחיר-2*ATR).
+        פורמט:
+        🚨 **{ticker}**
+        **פסק דין:** ...
+        **תובנה:** ...
+        **🛡️ סטופ:** $...
+        """
+        return model.generate_content(prompt).text
+    except: return f"⚠️ Error {ticker}"
+
+def analyze():
+    print("Starting Scan...")
+    data = yf.download(WATCHLIST, period="1y", interval="1d", progress=False)
+    alerts = []
+    for t in WATCHLIST:
+        try:
+            df = data.xs(t, level=1, axis=1) if isinstance(data.columns, pd.MultiIndex) else data
+            if df.empty: continue
+            close = df['Close']
+            rsi = 100 - (100 / (1 + (close.diff().where(close.diff()>0,0).rolling(14).mean() / -close.diff().where(close.diff()<0,0).rolling(14).mean())))
+            upper = close.rolling(20).mean() + (2*close.rolling(20).std())
+            lower = close.rolling(20).mean() - (2*close.rolling(20).std())
+            
+            curr_p = close.iloc[-1]
+            curr_r = rsi.iloc[-1]
+            
+            # לוגיקה: רק אם יש משהו מעניין (RSI קיצוני או פריצת בולינגר)
+            if curr_r < 30 or curr_r > 75 or curr_p < lower.iloc[-1] or curr_p > upper.iloc[-1]:
+                alerts.append(get_ai_analysis(t, curr_p, curr_r, 0, 0, close.rolling(200).mean().iloc[-1], (df['High']-df['Low']).rolling(14).mean().iloc[-1], upper.iloc[-1], lower.iloc[-1]))
+                time.sleep(2)
+        except: pass
+    
+    if alerts: send_telegram("🛡️ **דוח מודיעין APEX**\n\n" + "\n---\n".join(alerts))
+
+if __name__ == "__main__": analyze()
