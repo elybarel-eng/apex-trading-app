@@ -43,20 +43,27 @@ load_custom_css()
 @st.cache_resource
 def connect_to_db():
     try:
-        if "gcp_service_account" not in st.secrets: return None
+        # בדיקה שהסודות קיימים
+        if "gcp_service_account" not in st.secrets:
+            st.error("שגיאה: חסר מפתח גוגל בקובץ secrets.toml")
+            return None
+        
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        # טעינת המפתח מתוך הקובץ הסודי
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         return client.open("APEX_Database")
-    except: return None
+    except Exception as e:
+        st.error(f"לא ניתן להתחבר לגוגל שיטס: {e}")
+        return None
 
 def get_ai_response(messages, context_data):
     try:
-        if "GOOGLE_API_KEY" not in st.secrets: return "⚠️ Error: AI Key Missing."
+        if "GOOGLE_API_KEY" not in st.secrets: return "⚠️ שגיאה: חסר מפתח AI בקובץ הסודות."
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
         model = genai.GenerativeModel('gemini-pro')
-        prompt = f"Role: Trading Mentor. Context: {context_data}. Question: {messages[-1]['content']}. Keep it short & professional."
+        prompt = f"Role: Trading Mentor. Context: {context_data}. Question: {messages[-1]['content']}. Keep it short & professional (Hebrew/English)."
         chat = [{'role': 'user', 'parts': [prompt]}]
         for m in messages: chat.append({'role': 'user' if m['role']=='user' else 'model', 'parts': [m['content']]})
         return model.generate_content(chat).text
@@ -103,13 +110,16 @@ def render_prediction(df, ticker):
 
 # --- 5. ניהול משתמשים ---
 def make_hashes(p): return hashlib.sha256(str.encode(p)).hexdigest()
+
 def login_user(u, p):
     try:
         sh = connect_to_db()
         if not sh: return False
         df = pd.DataFrame(sh.worksheet("users").get_all_records())
-        return not df.empty and u in df['username'].values and make_hashes(p) == df[df['username']==u]['password'].values[0]
+        if df.empty: return False
+        return u in df['username'].values and make_hashes(p) == df[df['username']==u]['password'].values[0]
     except: return False
+
 def create_user(u, p):
     try:
         sh = connect_to_db()
@@ -118,9 +128,11 @@ def create_user(u, p):
         if u in ws.col_values(1): return False
         ws.append_row([u, make_hashes(p), str(datetime.now())]); return True
     except: return False
+
 def add_trade(u, s, q, p):
     try: connect_to_db().worksheet("trades").append_row([u, s, q, p, str(datetime.now())]); return True
     except: return False
+
 def get_portfolio(u):
     try:
         df = pd.DataFrame(connect_to_db().worksheet("trades").get_all_records())
@@ -237,7 +249,7 @@ def main_app(username):
             c1,c2 = st.columns(2)
             init = c1.number_input("התחלה", 10000); mon = c1.number_input("חודשי", 1500)
             rate = c2.slider("תשואה %", 2, 15, 8); yrs = c2.slider("שנים", 5, 40, 20)
-            final = init * (1+rate/100)**yrs
+            final = init * (1+rate/100)**yrs 
             st.metric("צפי סופי", f"₪{final:,.0f}")
         with at[3]: st.markdown("[Bloomberg](https://bloomberg.com) | [TradingView](https://tradingview.com)")
 
@@ -252,10 +264,10 @@ if not st.session_state.logged_in:
             u=st.text_input("User"); p=st.text_input("Pass", type="password")
             if st.button("Enter"):
                 if login_user(u,p): st.session_state.logged_in=True; st.session_state.username=u; st.rerun()
-                else: st.error("Denied")
+                else: st.error("Denied (Check Users DB)")
         with t2:
             nu=st.text_input("New User"); np=st.text_input("New Pass", type="password")
             if st.button("Create"):
                 if create_user(nu,np): st.success("Created")
-                else: st.error("Taken")
+                else: st.error("Taken or DB Error")
 else: main_app(st.session_state.username)
