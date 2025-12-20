@@ -27,14 +27,8 @@ def load_custom_css():
             a { color: #D4AF37; text-decoration: none; font-weight: bold; }
             .stButton button { background: linear-gradient(45deg, #D4AF37, #F4CF57); color: #000; font-weight: 700; border: none; border-radius: 6px; }
             .stButton button:hover { transform: scale(1.02); box-shadow: 0 4px 12px rgba(212, 175, 55, 0.4); }
-            [data-testid="stPopover"] > button {
-                background-color: #161B22; color: #D4AF37; border: 2px solid #D4AF37;
-                border-radius: 50%; width: 60px; height: 60px; font-size: 28px;
-                box-shadow: 0 0 15px rgba(212, 175, 55, 0.2); position: fixed; bottom: 30px; right: 30px; z-index: 9999;
-            }
-            [data-testid="stMetricValue"] { color: #E6EDF3; font-weight: 700; }
-            [data-testid="stExpander"] { border: 1px solid #30363D; border-radius: 8px; background-color: #161B22; }
-            [data-testid="stDataFrame"] { border: 1px solid #30363D; border-radius: 8px; }
+            [data-testid="stMetricValue"] { color: #E6EDF3 !important; font-weight: 700; }
+            [data-testid="stMetricLabel"] { color: #A0A0A0 !important; }
         </style>
     """, unsafe_allow_html=True)
 load_custom_css()
@@ -42,232 +36,347 @@ load_custom_css()
 # --- 3. חיבורים (DB & AI) ---
 @st.cache_resource
 def connect_to_db():
+    """חיבור לגוגל שיטס עם טיפול בשגיאות"""
     try:
-        # בדיקה שהסודות קיימים
         if "gcp_service_account" not in st.secrets:
-            st.error("שגיאה: חסר מפתח גוגל בקובץ secrets.toml")
+            st.error("❌ שגיאה: המפתח 'gcp_service_account' חסר בקובץ secrets.toml")
             return None
         
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        # טעינת המפתח מתוך הקובץ הסודי
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         return client.open("APEX_Database")
     except Exception as e:
-        st.error(f"לא ניתן להתחבר לגוגל שיטס: {e}")
+        st.error(f"❌ שגיאת חיבור לגוגל שיטס: {e}")
         return None
 
 def get_ai_response(messages, context_data):
+    """שליחת בקשה ל-AI"""
     try:
-        if "GOOGLE_API_KEY" not in st.secrets: return "⚠️ שגיאה: חסר מפתח AI בקובץ הסודות."
+        if "GOOGLE_API_KEY" not in st.secrets:
+            return "⚠️ שגיאה: חסר מפתח AI בקובץ הסודות."
+        
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
         model = genai.GenerativeModel('gemini-pro')
-        prompt = f"Role: Trading Mentor. Context: {context_data}. Question: {messages[-1]['content']}. Keep it short & professional (Hebrew/English)."
-        chat = [{'role': 'user', 'parts': [prompt]}]
-        for m in messages: chat.append({'role': 'user' if m['role']=='user' else 'model', 'parts': [m['content']]})
-        return model.generate_content(chat).text
-    except Exception as e: return f"AI Error: {e}"
+        
+        chat_history = [{'role': 'user', 'parts': [f"Context: {context_data}. You are a pro trader named APEX. Be short and sharp."]}]
+        for m in messages:
+            role = 'user' if m['role']=='user' else 'model'
+            chat_history.append({'role': role, 'parts': [m['content']]})
+            
+        return model.generate_content(chat_history).text
+    except Exception as e:
+        return f"שגיאת AI: {str(e)}"
 
-# --- 4. נתונים וניתוח ---
+# --- 4. פונקציות מסחר וניתוח ---
 @st.cache_data(ttl=60)
 def get_data(ticker, period, interval):
     try:
         stock = yf.Ticker(ticker)
-        return stock.history(period=period, interval=interval), stock.info
-    except: return pd.DataFrame(), {}
+        df = stock.history(period=period, interval=interval)
+        return df, stock.info
+    except:
+        return pd.DataFrame(), {}
 
 def add_indicators(df):
     if df.empty: return df
     df['RSI'] = 100 - (100 / (1 + (df['Close'].diff().where(df['Close'].diff() > 0, 0).rolling(14).mean() / -df['Close'].diff().where(df['Close'].diff() < 0, 0).rolling(14).mean())))
     df['SMA_50'] = df['Close'].rolling(50).mean()
     df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
-    low14, high14 = df['Low'].rolling(14).min(), df['High'].rolling(14).max()
-    df['K_Percent'] = 100 * ((df['Close'] - low14) / (high14 - low14))
+    df['BB_Upper'] = df['Close'].rolling(20).mean() + (df['Close'].rolling(20).std() * 2)
+    df['BB_Lower'] = df['Close'].rolling(20).mean() - (df['Close'].rolling(20).std() * 2)
     return df
 
 def render_prediction(df, ticker):
-    st.markdown("### 🔮 AI Price Projector (30 Days)")
-    st.info("מודל רגרסיה ליניארית המזהה את המגמה. לא המלצה למסחר.")
+    st.markdown("### 🔮 APEX Vision (AI Forecast)")
+    if len(df) < 30: return
+
     df_p = df.copy().reset_index()
     df_p['DateNum'] = df_p['Date'].apply(lambda x: x.toordinal())
-    X, y = df_p[['DateNum']], df_p['Close']
+    
+    X = df_p[['DateNum']]
+    y = df_p['Close']
     model = LinearRegression().fit(X, y)
+    
     future_dates = [df_p['Date'].iloc[-1] + timedelta(days=i) for i in range(1, 31)]
     future_X = np.array([d.toordinal() for d in future_dates]).reshape(-1, 1)
     pred = model.predict(future_X)
+    
     chg = ((pred[-1] - y.iloc[-1]) / y.iloc[-1]) * 100
     
     c1, c2 = st.columns([1, 3])
-    c1.metric("צפי ל-30 יום", f"${pred[-1]:.2f}", f"{chg:.2f}%")
-    c1.metric("אמינות מגמה", f"{model.score(X, y)*100:.1f}%")
-    
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='History', line=dict(color='#00C805')))
-    fig.add_trace(go.Scatter(x=future_dates, y=pred, name='AI Forecast', line=dict(color='#D4AF37', dash='dot')))
-    fig.update_layout(template="plotly_dark", height=350, margin=dict(t=10,b=10,l=0,r=0))
-    c2.plotly_chart(fig, use_container_width=True)
+    with c1:
+        st.metric("צפי ל-30 יום", f"${pred[-1]:.2f}", f"{chg:.2f}%")
+        st.caption(f"אמינות מגמה: {model.score(X, y)*100:.1f}%")
 
-# --- 5. ניהול משתמשים ---
-def make_hashes(p): return hashlib.sha256(str.encode(p)).hexdigest()
+    with c2:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='History', line=dict(color='#00C805')))
+        fig.add_trace(go.Scatter(x=future_dates, y=pred, name='Forecast', line=dict(color='#D4AF37', dash='dot')))
+        fig.update_layout(template="plotly_dark", height=300, margin=dict(t=10,b=10,l=0,r=0))
+        st.plotly_chart(fig, use_container_width=True)
+
+# --- 5. ניהול משתמשים (כולל התיקון!) ---
+def make_hashes(p):
+    return hashlib.sha256(str.encode(p)).hexdigest()
 
 def login_user(u, p):
+    """פונקציית התחברות מתוקנת - מטפלת בבעיות המרת סוגי נתונים"""
+    sh = connect_to_db()
+    if not sh: return False
     try:
-        sh = connect_to_db()
-        if not sh: return False
-        df = pd.DataFrame(sh.worksheet("users").get_all_records())
+        ws = sh.worksheet("users")
+        records = ws.get_all_records()
+        df = pd.DataFrame(records)
+        
         if df.empty: return False
-        return u in df['username'].values and make_hashes(p) == df[df['username']==u]['password'].values[0]
-    except: return False
+        
+        # --- התיקון הקריטי: המרה לטקסט ---
+        # מוודאים שכל שמות המשתמשים הם טקסט (למקרה שמישהו נרשם עם מספר)
+        df['username'] = df['username'].astype(str)
+        u = str(u).strip() # ניקוי רווחים והמרה לטקסט
+        
+        # חיפוש המשתמש
+        user_row = df[df['username'] == u]
+        if user_row.empty: return False
+        
+        # השוואת סיסמאות
+        stored_pass = str(user_row.iloc[0]['password'])
+        input_pass = make_hashes(p)
+        
+        return stored_pass == input_pass
+    except Exception as e:
+        st.error(f"שגיאת התחברות: {e}")
+        return False
 
 def create_user(u, p):
+    sh = connect_to_db()
+    if not sh: return False
     try:
-        sh = connect_to_db()
-        if not sh: return False
         ws = sh.worksheet("users")
-        if u in ws.col_values(1): return False
-        ws.append_row([u, make_hashes(p), str(datetime.now())]); return True
-    except: return False
+        # המרה לטקסט גם בבדיקת הכפילויות
+        existing_users = [str(x) for x in ws.col_values(1)]
+        
+        if str(u) in existing_users:
+            return False # המשתמש קיים
+            
+        ws.append_row([str(u), make_hashes(p), str(datetime.now())])
+        return True
+    except Exception as e:
+        st.error(f"שגיאת יצירה: {e}")
+        return False
 
 def add_trade(u, s, q, p):
-    try: connect_to_db().worksheet("trades").append_row([u, s, q, p, str(datetime.now())]); return True
+    sh = connect_to_db()
+    if not sh: return False
+    try:
+        sh.worksheet("trades").append_row([u, s, int(q), float(p), str(datetime.now())])
+        return True
     except: return False
 
 def get_portfolio(u):
+    sh = connect_to_db()
+    if not sh: return pd.DataFrame()
     try:
-        df = pd.DataFrame(connect_to_db().worksheet("trades").get_all_records())
-        if df.empty: return df
-        udf = df[df['username'] == u]
+        records = sh.worksheet("trades").get_all_records()
+        if not records: return pd.DataFrame()
+        
+        df = pd.DataFrame(records)
+        # סינון לפי שם משתמש (כטקסט)
+        df['username'] = df['username'].astype(str)
+        udf = df[df['username'] == str(u)].copy()
+        
         if udf.empty: return pd.DataFrame()
-        return udf.groupby('symbol').apply(lambda x: pd.Series({'Quantity': x['quantity'].sum(), 'AvgPrice': (x['quantity']*x['price']).sum()/x['quantity'].sum()})).reset_index()
+        
+        # המרות סוגים לחישובים
+        udf['quantity'] = pd.to_numeric(udf['quantity'])
+        udf['price'] = pd.to_numeric(udf['price'])
+        
+        # סיכום לפי מניה
+        ptf = udf.groupby('symbol').apply(
+            lambda x: pd.Series({
+                'Quantity': x['quantity'].sum(),
+                'AvgPrice': (x['quantity'] * x['price']).sum() / x['quantity'].sum()
+            })
+        ).reset_index()
+        return ptf[ptf['Quantity'] > 0]
     except: return pd.DataFrame()
 
 # --- 6. האפליקציה הראשית ---
 def main_app(username):
-    st.sidebar.markdown("## 💎 APEX PRO")
-    st.sidebar.caption(f"Operator: {username} | Status: Online")
-    if st.sidebar.button("LOGOUT"): st.session_state.logged_in=False; st.rerun()
-
-    # AI Chat
+    # סרגל צד
     with st.sidebar:
-        with st.popover("💬 AI Assistant", use_container_width=True):
+        st.title("💎 APEX PRO")
+        st.caption(f"User: {username}")
+        
+        with st.expander("💬 AI Chat", expanded=True):
             if "msgs" not in st.session_state: st.session_state.msgs = []
-            for m in st.session_state.msgs: st.markdown(f"**{'You' if m['role']=='user' else 'APEX'}:** {m['content']}")
-            if p := st.chat_input("Ask me..."):
+            for m in st.session_state.msgs[-3:]:
+                st.markdown(f"**{'👤' if m['role']=='user' else '🤖'}**: {m['content']}")
+            
+            if p := st.chat_input("Ask market info..."):
                 st.session_state.msgs.append({"role":"user", "content":p})
-                with st.spinner("..."): r = get_ai_response(st.session_state.msgs, st.session_state.get('ctx', 'General'))
-                st.session_state.msgs.append({"role":"assistant", "content":r}); st.rerun()
+                r = get_ai_response(st.session_state.msgs, st.session_state.get('ctx', 'General'))
+                st.session_state.msgs.append({"role":"assistant", "content":r})
+                st.rerun()
+                
+        if st.button("LOGOUT", type="primary"):
+            st.session_state.logged_in = False
+            st.rerun()
 
+    # לשוניות
     tabs = st.tabs(["📊 Market", "💼 Portfolio", "🕹️ Simulator", "📡 Scanner", "🎓 Academy"])
 
-    with tabs[0]: # Market
+    # --- MARKET ---
+    with tabs[0]:
         c1, c2 = st.columns([1,3])
         if t := c1.text_input("Symbol", "NVDA").upper():
             with st.spinner("Loading..."):
                 df, info = get_data(t, "2y", "1d")
                 if not df.empty:
                     df = add_indicators(df)
-                    cur = df.iloc[-1]
-                    st.session_state.ctx = f"{t}: ${cur['Close']:.2f}, RSI:{cur['RSI']:.1f}"
-                    with st.container(border=True):
-                        cols = st.columns(4)
-                        cols[0].metric("Price", f"${cur['Close']:.2f}")
-                        cols[1].metric("RSI", f"{cur['RSI']:.1f}", help=">70 High, <30 Low")
-                        cols[2].metric("ATR", f"{cur['ATR']:.2f}")
-                        cols[3].metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
+                    st.session_state.ctx = f"{t}: ${df['Close'].iloc[-1]:.2f}"
                     
-                    fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
+                    with st.container(border=True):
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("Price", f"${df['Close'].iloc[-1]:.2f}")
+                        col2.metric("RSI", f"{df['RSI'].iloc[-1]:.1f}")
+                        col3.metric("Change", f"{df['Close'].pct_change().iloc[-1]*100:.2f}%")
+
+                    fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], close=df['Close'], high=df['High'], low=df['Low'])])
                     fig.add_trace(go.Scatter(x=df.index, y=df['SMA_50'], line=dict(color='#D4AF37'), name='SMA 50'))
-                    fig.update_layout(title=f"{t} Analysis", template="plotly_dark", height=500)
+                    fig.update_layout(template="plotly_dark", height=500, title=f"{t} Chart")
                     st.plotly_chart(fig, use_container_width=True)
+                    
                     st.divider()
                     render_prediction(df, t)
-                    st.divider()
-                    st.markdown("### 🏢 Fundamentals")
-                    c1,c2,c3 = st.columns(3)
-                    c1.metric("Market Cap", f"${info.get('marketCap',0)/1e9:.1f}B")
-                    c2.metric("Target", f"${info.get('targetMeanPrice', 0)}")
-                    c3.metric("Margin", f"{info.get('profitMargins',0)*100:.1f}%")
-                    st.caption(info.get('longBusinessSummary', ''))
-                else: st.error("Not Found")
 
-    with tabs[1]: # Portfolio
-        st.header(f"Cloud Vault: {username}")
+    # --- PORTFOLIO ---
+    with tabs[1]:
+        st.header("My Vault")
         with st.expander("➕ Add Trade"):
-            with st.form("trd"):
+            with st.form("trade"):
                 c1,c2,c3 = st.columns(3)
-                s = c1.text_input("Sym").upper(); q = c2.number_input("Qty", step=1); p = c3.number_input("Price", min_value=0.1)
-                if st.form_submit_button("Sync"): 
-                    if add_trade(username, s, q, p): st.success("Saved"); st.rerun()
-        df_p = get_portfolio(username)
-        if not df_p.empty: st.dataframe(df_p, use_container_width=True)
-
-    with tabs[2]: # Simulator
-        st.header("🕹️ Time Machine")
-        if 'sim_t' not in st.session_state:
-            st.session_state.sim_t = random.choice(["AAPL","TSLA","NVDA","AMZN"])
-            d, _ = get_data(st.session_state.sim_t, "2y", "1d")
-            st.session_state.sim_d = add_indicators(d)
-            st.session_state.sim_c = random.randint(100, len(d)-30)
-            st.session_state.sim_rev = False
+                s = c1.text_input("Symbol").upper()
+                q = c2.number_input("Qty", step=1, min_value=1)
+                pr = c3.number_input("Price", min_value=0.1)
+                if st.form_submit_button("Save"):
+                    if add_trade(username, s, q, pr): st.success("Saved!"); time.sleep(1); st.rerun()
         
-        d, c = st.session_state.sim_d, st.session_state.sim_c
-        vis = d.iloc[:c]
+        df_p = get_portfolio(username)
+        if not df_p.empty:
+            # הוספת שווי נוכחי
+            vals = []
+            for sym in df_p['symbol']:
+                try: vals.append(yf.Ticker(sym).fast_info['last_price'])
+                except: vals.append(0)
+            df_p['Current'] = vals
+            df_p['Total Value'] = df_p['Quantity'] * df_p['Current']
+            df_p['Profit'] = df_p['Total Value'] - (df_p['Quantity'] * df_p['AvgPrice'])
+            
+            st.dataframe(df_p.style.format({"AvgPrice":"${:.2f}", "Current":"${:.2f}", "Total Value":"${:.2f}", "Profit":"${:.2f}"}), use_container_width=True)
+            st.metric("Total Equity", f"${df_p['Total Value'].sum():,.2f}")
+
+    # --- SIMULATOR ---
+    with tabs[2]:
+        st.header("🕹️ Market Time Machine")
+        if 'sim_t' not in st.session_state:
+            st.session_state.sim_t = random.choice(["AAPL","TSLA","NVDA","AMZN","AMD"])
+            data, _ = get_data(st.session_state.sim_t, "5y", "1d")
+            st.session_state.sim_data = data
+            st.session_state.sim_idx = random.randint(200, len(data)-100)
+            st.session_state.sim_done = False
+        
+        idx = st.session_state.sim_idx
+        vis = st.session_state.sim_data.iloc[idx-100:idx]
+        
         fig = go.Figure(data=[go.Candlestick(x=vis.index, open=vis['Open'], close=vis['Close'])])
-        fig.update_layout(title=f"Mystery: {st.session_state.sim_t}", template="plotly_dark", height=400)
+        fig.update_layout(title=f"Mystery Stock: {st.session_state.sim_t} (Hidden Date)", template="plotly_dark", xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
         
-        if not st.session_state.sim_rev:
-            c1,c2,c3 = st.columns(3)
-            if c1.button("BUY"): st.session_state.ch="LONG"; st.session_state.sim_rev=True; st.rerun()
-            if c2.button("SELL"): st.session_state.ch="SHORT"; st.session_state.sim_rev=True; st.rerun()
-            if c3.button("SKIP"): del st.session_state['sim_t']; st.rerun()
+        c1,c2,c3 = st.columns(3)
+        if not st.session_state.sim_done:
+            if c1.button("BUY 🐂", use_container_width=True): st.session_state.choice="LONG"; st.session_state.sim_done=True; st.rerun()
+            if c2.button("SELL 🐻", use_container_width=True): st.session_state.choice="SHORT"; st.session_state.sim_done=True; st.rerun()
+            if c3.button("SKIP ⏭️", use_container_width=True): del st.session_state.sim_t; st.rerun()
         else:
-            pct = ((d.iloc[c+20]['Close']-d.iloc[c]['Close'])/d.iloc[c]['Close'])*100
-            win = (st.session_state.ch=="LONG" and pct>0) or (st.session_state.ch=="SHORT" and pct<0)
-            st.success(f"WIN! {pct:.2f}%") if win else st.error(f"LOSS. {pct:.2f}%")
-            if st.button("Again"): del st.session_state['sim_t']; st.rerun()
+            future = st.session_state.sim_data['Close'].iloc[idx+30]
+            start = st.session_state.sim_data['Close'].iloc[idx]
+            pct = ((future-start)/start)*100
+            win = (st.session_state.choice=="LONG" and pct>0) or (st.session_state.choice=="SHORT" and pct<0)
+            
+            if win: st.success(f"WIN! It moved {pct:.2f}%"); st.balloons()
+            else: st.error(f"LOSS. It moved {pct:.2f}%")
+            if st.button("Next Round"): del st.session_state.sim_t; st.rerun()
 
-    with tabs[3]: # Scanner
-        st.header("📡 Radar")
-        if st.button("Scan Tech"):
+    # --- SCANNER ---
+    with tabs[3]:
+        st.header("📡 Live Scanner")
+        if st.button("Scan Tech Giants"):
             tk = ["AAPL","MSFT","GOOGL","AMZN","TSLA","NVDA"]
             res = []
-            dt = yf.download(tk, period="3mo", progress=False)['Close']
             for t in tk:
-                s = dt[t].dropna()
-                rsi = 100-(100/(1+(s.diff().where(s.diff()>0,0).rolling(14).mean()/-s.diff().where(s.diff()<0,0).rolling(14).mean()).iloc[-1]))
-                res.append({"T":t, "RSI":f"{rsi:.1f}", "Stat": "HOT" if rsi>70 else "COLD" if rsi<30 else "OK"})
+                try:
+                    d = yf.Ticker(t).history(period="3mo")
+                    if not d.empty:
+                        # חישוב RSI מהיר
+                        delta = d['Close'].diff()
+                        up, down = delta.copy(), delta.copy()
+                        up[up < 0] = 0
+                        down[down > 0] = 0
+                        rs = up.ewm(span=14).mean() / down.abs().ewm(span=14).mean()
+                        rsi = 100 - 100 / (1 + rs)
+                        
+                        r_val = rsi.iloc[-1]
+                        stat = "HOT 🔥" if r_val > 70 else "COLD ❄️" if r_val < 30 else "OK"
+                        res.append({"Symbol":t, "Price":f"${d['Close'].iloc[-1]:.2f}", "RSI":f"{r_val:.1f}", "Status":stat})
+                except: pass
             st.dataframe(pd.DataFrame(res), use_container_width=True)
 
-    with tabs[4]: # Academy
-        st.title("🎓 APEX University")
-        at = st.tabs(["📚 ספר לימוד", "🏛️ אוניברסיטה", "🧮 מחשבון", "🌐 מקורות"])
-        with at[0]: st.info("פרקים: יסודות, טכני, פסיכולוגיה.")
-        with at[1]: st.info("פקולטות: מאקרו, נגזרים, ניהול סיכונים.")
-        with at[2]: 
-            c1,c2 = st.columns(2)
-            init = c1.number_input("התחלה", 10000); mon = c1.number_input("חודשי", 1500)
-            rate = c2.slider("תשואה %", 2, 15, 8); yrs = c2.slider("שנים", 5, 40, 20)
-            final = init * (1+rate/100)**yrs 
-            st.metric("צפי סופי", f"₪{final:,.0f}")
-        with at[3]: st.markdown("[Bloomberg](https://bloomberg.com) | [TradingView](https://tradingview.com)")
+    # --- ACADEMY ---
+    with tabs[4]:
+        st.title("🎓 Academy")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.write("### מחשבון ריבית")
+            init = st.number_input("סכום התחלה", 10000)
+            rate = st.slider("תשואה %", 1, 15, 8)
+            yrs = st.slider("שנים", 1, 40, 20)
+            final = init * (1+rate/100)**yrs
+            st.metric("תוצאה", f"₪{final:,.0f}")
+        with c2:
+            st.write("### מנטור AI")
+            q = st.text_input("מה תרצה ללמוד?")
+            if q and st.button("למד אותי"):
+                st.info(get_ai_response([{'role':'user', 'content':f"Teach me: {q}"}], "Education"))
 
-# --- Login System ---
+
+# --- לוגיקת כניסה ---
 if 'logged_in' not in st.session_state: st.session_state.logged_in=False; st.session_state.username=''
+
 if not st.session_state.logged_in:
     c1,c2,c3 = st.columns([1,2,1])
     with c2:
         st.title("💎 APEX LOGIN")
-        t1,t2 = st.tabs(["Login","Sign Up"])
+        t1,t2 = st.tabs(["Login", "Sign Up"])
+        
         with t1:
-            u=st.text_input("User"); p=st.text_input("Pass", type="password")
-            if st.button("Enter"):
-                if login_user(u,p): st.session_state.logged_in=True; st.session_state.username=u; st.rerun()
-                else: st.error("Denied (Check Users DB)")
+            u = st.text_input("User")
+            p = st.text_input("Password", type="password")
+            if st.button("Enter", use_container_width=True):
+                if login_user(u, p):
+                    st.session_state.logged_in = True
+                    st.session_state.username = str(u)
+                    st.rerun()
+                else: st.error("Wrong user/pass")
+        
         with t2:
-            nu=st.text_input("New User"); np=st.text_input("New Pass", type="password")
-            if st.button("Create"):
-                if create_user(nu,np): st.success("Created")
-                else: st.error("Taken or DB Error")
-else: main_app(st.session_state.username)
+            nu = st.text_input("New User")
+            np = st.text_input("New Password", type="password")
+            if st.button("Create Account", use_container_width=True):
+                if create_user(nu, np): st.success("Created! Now Login.")
+                else: st.error("User taken")
+
+else:
+    main_app(st.session_state.username)
