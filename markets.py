@@ -549,4 +549,5 @@ if not st.session_state.logged_in:
                         st.error("שם המשתמש תפוס")
 else:
     # הפעלת האפליקציה הראשית אם המשתמש מחובר
-    main_app(st.session_state.username)
+    main_app(st.admin)
+
