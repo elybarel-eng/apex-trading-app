@@ -12,7 +12,7 @@ import random
 import numpy as np
 from sklearn.linear_model import LinearRegression
 
-# --- 1. הגדרות מערכת ---
+# --- 1. הגדרות מערכת ועיצוב ---
 st.set_page_config(page_title="APEX Terminal", layout="wide", page_icon="💎")
 
 def load_custom_css():
@@ -23,6 +23,7 @@ def load_custom_css():
             h1, h2, h3 { color: #D4AF37 !important; text-align: right; }
             .stMetric { text-align: right !important; }
             .stButton button { width: 100%; border-radius: 8px; font-weight: bold; }
+            .stMarkdown p { font-size: 1.1rem; }
         </style>
     """, unsafe_allow_html=True)
 load_custom_css()
@@ -43,7 +44,7 @@ def get_ai_response(messages, context_data):
     try:
         if "GOOGLE_API_KEY" not in st.secrets: return "⚠️ חסר מפתח AI"
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        # --- התיקון כאן: שינוי שם המודל לגרסה החדשה ---
+        # שימוש במודל החדש והתקין
         model = genai.GenerativeModel('gemini-1.5-flash')
         
         sys_prompt = f"Context: {context_data}. You are APEX, a professional trading mentor. Explain simply in Hebrew."
@@ -122,7 +123,6 @@ def main_app(username):
                 st.info(get_ai_response([{'role':'user', 'content':p}], "General Q&A"))
         
         st.markdown("---")
-        # התיקון להזחה (Indentation) שגרם לשגיאה הקודמת
         with st.expander("❓ מקרא מהיר"):
             st.write("**RSI:** מד חום למניה. מעל 70=רותח, מתחת ל-30=קפוא.")
             st.write("**SMA:** הקו הצהוב. אם המחיר מעליו = מגמת עלייה.")
@@ -144,6 +144,7 @@ def main_app(username):
                 last_price = df['Close'].iloc[-1]
                 last_rsi = df['RSI'].iloc[-1]
                 
+                # כפתור ה-AI המיוחד
                 if st.button(f"🤖 נתח לי את {ticker}", type="primary"):
                     with st.spinner("מנתח..."):
                         analysis = get_ai_response([{'role':'user', 'content':f"Analyze {ticker}. Price: {last_price}, RSI: {last_rsi}. Hebrew summary."}], "Analysis")
@@ -151,8 +152,8 @@ def main_app(username):
 
                 st.markdown("### נתוני זמן אמת")
                 m1, m2, m3 = st.columns(3)
-                m1.metric("מחיר אחרון", f"${last_price:.2f}")
-                m2.metric("RSI", f"{last_rsi:.1f}", delta_color="inverse" if last_rsi > 70 else "normal")
+                m1.metric("מחיר אחרון", f"${last_price:.2f}", help="מחיר סגירה אחרון")
+                m2.metric("RSI", f"{last_rsi:.1f}", delta_color="inverse" if last_rsi > 70 else "normal", help="מעל 70=יקר, מתחת ל-30=זול")
                 m3.metric("שינוי יומי", f"{df['Close'].pct_change().iloc[-1]*100:.2f}%")
 
                 fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
@@ -207,21 +208,94 @@ def main_app(username):
                 prog.progress((i+1)/len(tickers))
             st.dataframe(pd.DataFrame(res), use_container_width=True)
 
-    # --- לשונית 4: אקדמיה ---
+    # --- לשונית 4: אקדמיה (התוכן המלא!) ---
     with tabs[3]:
         st.header("🎓 אקדמיית APEX")
-        st.markdown("כאן לומדים איך לא להפסיד את הכסף.")
-        study_tabs = st.tabs(["📘 מושגי יסוד", "📈 קריאת גרף", "🧠 פסיכולוגיה"])
-        with study_tabs[0]:
-            with st.expander("מה זה שורט (Short)?"):
-                st.write("להרוויח כשמניה יורדת.")
-            with st.expander("מה זה Stop Loss?"):
-                st.error("חגורת בטיחות למניעת הפסדים גדולים.")
-        with study_tabs[1]:
-            st.write("### איך קוראים את הגרף?")
-            st.markdown("1. **נרות יפניים:** ירוק = עליה, אדום = ירידה.\n2. **SMA:** קו המגמה.\n3. **RSI:** מד מומנטום.")
-        with study_tabs[2]:
-            st.warning("אל תסכן יותר מ-1% מהתיק בעסקה אחת.")
+        st.markdown("כאן תמצא את כל הידע הדרוש כדי להפוך מסוחר מתחיל למקצוען.")
+        
+        study_tabs = st.tabs(["📘 יסודות", "📈 ניתוח טכני", "🧠 פסיכולוגיה", "🧮 מחשבון"])
+        
+        with study_tabs[0]: # יסודות
+            st.subheader("פרק א': שוק ההון למתחילים")
+            with st.expander("מהי מניה?"):
+                st.write("""
+                מניה היא חלק בבעלות על חברה. כשאתה קונה מניה של אפל, אתה הופך להיות שותף (קטן מאוד) באפל.
+                - **למה המניה עולה?** כי אנשים מאמינים שהחברה תרוויח יותר בעתיד.
+                - **למה המניה יורדת?** כי אנשים חוששים שהרווחים ירדו.
+                """)
+            with st.expander("לונג (Long) מול שורט (Short)"):
+                st.info("**Long:** קונים בזול, מחכים שהמחיר יעלה, מוכרים ביוקר.")
+                st.error("**Short:** מוכרים מניה שאין לנו (בהלוואה), מחכים שהמחיר ירד, וקונים אותה חזרה בזול.")
+            with st.expander("סוגי הוראות מסחר (Market vs Limit)"):
+                st.write("""
+                * **Market:** קנה עכשיו בכל מחיר שיש בשוק (מהיר אבל מסוכן).
+                * **Limit:** קנה רק אם המחיר הוא X או נמוך יותר (בטוח יותר, אבל אולי לא תקבל את המניה).
+                * **Stop Loss:** פקודה אוטומטית למכור אם הפסדת יותר מדי (חובה לכל סוחר!).
+                """)
+
+        with study_tabs[1]: # טכני
+            st.subheader("פרק ב': הארגז הכלים הטכני")
+            st.write("הגרפים לא משקרים. הנה הכלים שיעזרו לך לקרוא אותם:")
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("#### RSI (מדד העוצמה היחסית)")
+                st.write("""
+                מודד האם המניה "התעייפה".
+                * **מעל 70:** קניית יתר (Overbought) - סיכוי לירידה 🔻.
+                * **מתחת ל-30:** מכירת יתר (Oversold) - סיכוי לעלייה 💚.
+                """)
+            with c2:
+                st.markdown("#### רצועות בולינגר (Bollinger Bands)")
+                st.write("""
+                מודד תנודתיות.
+                * כשהמחיר נוגע ברצועה העליונה: הוא יקר יחסית.
+                * כשהמחיר נוגע ברצועה התחתונה: הוא זול יחסית.
+                * כשהרצועות מתכווצות: צפויה תנועה חדה בקרוב ("שקט שלפני הסערה").
+                """)
+            
+            st.markdown("---")
+            st.markdown("#### זיהוי מגמות (Trend)")
+            st.write("החוק הכי חשוב: **Trend is your Friend**.")
+            st.write("אל תנסה לתפוס סכין נופלת. קנה כשהמגמה בעלייה (Higher Highs) ומכור כשהיא בירידה (Lower Lows).")
+
+        with study_tabs[2]: # פסיכולוגיה
+            st.subheader("פרק ג': האויב שבפנים")
+            st.warning("80% מההצלחה במסחר היא פסיכולוגיה, רק 20% טכניקה.")
+            
+            with st.expander("FOMO (פחד להחמיץ)"):
+                st.write("""
+                ההרגשה ש"כולם עושים כסף חוץ ממני" וגורמת לך לקנות בשיא.
+                **הפתרון:** אם המניה כבר טסה 20% היום - פספסת. חכה להזדמנות הבאה. תמיד יש עוד רכבת.
+                """)
+            with st.expander("מסחר נקמה (Revenge Trading)"):
+                st.write("""
+                הפסדת כסף? הרצון הטבעי הוא "להחזיר את הכסף מהר" ולהגדיל את ההימור.
+                **התוצאה:** מחיקת התיק.
+                **הפתרון:** הפסדת? סגור את המחשב ולך לעשות ספורט. מחר יום חדש.
+                """)
+            with st.expander("ניהול סיכונים (חוק ה-1%)"):
+                st.success("""
+                לעולם אל תסכן יותר מ-1% מהתיק שלך בעסקה אחת.
+                אם יש לך $10,000, המקסימום שאתה מרשה לעצמך להפסיד בעסקה אחת הוא $100.
+                זה יבטיח שתשרוד גם רצף של הפסדים.
+                """)
+
+        with study_tabs[3]: # מחשבון
+            st.subheader("מחשבון הריבית השמינית")
+            st.write("ראה כמה הכסף שלך יכול לצמוח:")
+            amount = st.number_input("סכום התחלתי (₪)", 10000, 1000000, 50000)
+            monthly = st.number_input("הפקדה חודשית (₪)", 0, 50000, 1000)
+            years = st.slider("למשך כמה שנים?", 1, 40, 20)
+            rate = st.slider("תשואה שנתית ממוצעת (%)", 1, 15, 8)
+            
+            final_val = amount * (1+rate/100)**years
+            for i in range(years * 12):
+                months_left = (years * 12) - i
+                final_val += monthly * (1+rate/100)**(months_left/12)
+            
+            st.metric("שווי עתידי מוערך", f"₪{final_val:,.0f}")
+            st.caption("* חישוב ריבית דריבית ממוצעת, ללא התחשבות באינפלציה או מס.")
 
 # הרצה במצב "עוקף כניסה" (Admin)
 main_app("Admin")
