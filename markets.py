@@ -43,7 +43,9 @@ def get_ai_response(messages, context_data):
     try:
         if "GOOGLE_API_KEY" not in st.secrets: return "⚠️ חסר מפתח AI"
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        model = genai.GenerativeModel('gemini-pro')
+        # --- התיקון כאן: שינוי שם המודל לגרסה החדשה ---
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
         sys_prompt = f"Context: {context_data}. You are APEX, a professional trading mentor. Explain simply in Hebrew."
         chat_history = [{'role': 'user', 'parts': [sys_prompt]}]
         for m in messages:
@@ -120,7 +122,7 @@ def main_app(username):
                 st.info(get_ai_response([{'role':'user', 'content':p}], "General Q&A"))
         
         st.markdown("---")
-        # --- כאן היה התיקון להזחה (Indentation) ---
+        # התיקון להזחה (Indentation) שגרם לשגיאה הקודמת
         with st.expander("❓ מקרא מהיר"):
             st.write("**RSI:** מד חום למניה. מעל 70=רותח, מתחת ל-30=קפוא.")
             st.write("**SMA:** הקו הצהוב. אם המחיר מעליו = מגמת עלייה.")
