@@ -126,7 +126,7 @@ def add_indicators(df):
     df['BB_Upper'] = df['Close'].rolling(20).mean() + (df['Close'].rolling(20).std() * 2)
     df['BB_Lower'] = df['Close'].rolling(20).mean() - (df['Close'].rolling(20).std() * 2)
     
-    # 4. MACD (חדש! ביקשת איכות)
+    # 4. MACD
     exp12 = df['Close'].ewm(span=12, adjust=False).mean()
     exp26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = exp12 - exp26
@@ -170,33 +170,8 @@ def render_prediction(df):
         st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# 4. ניהול משתמשים ופורטפוליו
+# 4. ניהול פורטפוליו (ללא אימות סיסמה)
 # ==========================================
-def make_hashes(p): return hashlib.sha256(str.encode(p)).hexdigest()
-
-def login_user(u, p):
-    sh = connect_to_db()
-    if not sh: return False
-    try:
-        df = pd.DataFrame(sh.worksheet("users").get_all_records())
-        if df.empty: return False
-        df['username'] = df['username'].astype(str)
-        user_row = df[df['username'] == str(u).strip()]
-        if user_row.empty: return False
-        return str(user_row.iloc[0]['password']) == make_hashes(p)
-    except: return False
-
-def create_user(u, p):
-    sh = connect_to_db()
-    if not sh: return False
-    try:
-        ws = sh.worksheet("users")
-        existing = [str(x) for x in ws.col_values(1)]
-        if str(u) in existing: return False
-        ws.append_row([str(u), make_hashes(p), str(datetime.now())])
-        return True
-    except: return False
-
 def add_trade(u, s, q, p):
     sh = connect_to_db()
     if not sh: return False
@@ -235,7 +210,7 @@ def main_app(username):
     # --- סרגל צד (Sidebar) ---
     with st.sidebar:
         st.title("💎 APEX PRO")
-        st.caption(f"מחובר כ: {username}")
+        st.caption(f"מחובר כ: {username} (Admin)")
         st.markdown("---")
         
         st.markdown("### 🧠 המנטור שלך")
@@ -245,9 +220,7 @@ def main_app(username):
                 st.info(ans)
         
         st.markdown("---")
-        if st.button("יציאה מהמערכת (Logout)"):
-            st.session_state.logged_in = False
-            st.rerun()
+        st.info("⚠️ מצב מנהל פעיל (עוקף סיסמה)")
 
     # --- לשוניות תוכן (Tabs) ---
     tabs = st.tabs(["📊 חדר מסחר", "💼 הכספת (תיק)", "📡 הראדאר", "🕹️ סימולטור", "🎓 אקדמיה"])
@@ -313,7 +286,7 @@ def main_app(username):
                         if add_trade(username, s, q, p): 
                             st.toast("✅ העסקה נרשמה!")
                             time.sleep(1); st.rerun()
-                        else: st.error("שגיאת רישום")
+                        else: st.error("שגיאה ברישום (בדוק חיבור לגוגל)")
 
         with c2:
             df_p = get_portfolio(username)
@@ -474,7 +447,7 @@ def main_app(username):
             c1, c2 = st.columns(2)
             with c1:
                 st.markdown("#### RSI (מדד העוצמה)")
-                # --- התיקון הקריטי כאן למטה: שימוש במרכאות משולשות ---
+                # השימוש במרכאות משולשות פותר את בעיית ה-String Literal
                 st.info("""כמו מד סל"ד באוטו. אם הוא מעל 70, המנוע 'צועק' (קניית יתר) ועשוי לעצור. אם מתחת ל-30, הוא 'נח' (מכירת יתר) ועשוי לזנק.""")
             with c2:
                 st.markdown("#### רצועות בולינגר")
@@ -510,44 +483,11 @@ def main_app(username):
 
 
 # ==========================================
-# 6. מסך כניסה והרשמה (Login Flow)
+# 6. עקיפת מסך כניסה (Bypass Login)
 # ==========================================
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-    st.session_state.username = ""
+# במקום לבקש סיסמה, אנחנו מגדירים אותך ישירות כ-Admin
+st.session_state.logged_in = True
+st.session_state.username = "Admin"
 
-if not st.session_state.logged_in:
-    # מרכוז מסך הכניסה
-    col1, col2, col3 = st.columns([1,2,1])
-    with col2:
-        st.markdown("<h1 style='text-align: center;'>💎 APEX</h1>", unsafe_allow_html=True)
-        
-        login_tab, signup_tab = st.tabs(["כניסה למערכת", "הרשמה חדשה"])
-        
-        with login_tab:
-            with st.form("login"):
-                u = st.text_input("שם משתמש")
-                p = st.text_input("סיסמה", type="password")
-                if st.form_submit_button("התחבר", use_container_width=True):
-                    if login_user(u, p):
-                        st.session_state.logged_in = True
-                        st.session_state.username = str(u).strip()
-                        st.rerun()
-                    else:
-                        st.error("שם משתמש או סיסמה שגויים")
-        
-        with signup_tab:
-            with st.form("signup"):
-                new_u = st.text_input("בחר שם משתמש")
-                new_p = st.text_input("בחר סיסמה", type="password")
-                if st.form_submit_button("צור חשבון", use_container_width=True):
-                    if len(new_p) < 4:
-                        st.warning("הסיסמה קצרה מדי")
-                    elif create_user(new_u, new_p):
-                        st.success("החשבון נוצר! כעת עבור ללשונית כניסה.")
-                    else:
-                        st.error("שם המשתמש תפוס")
-else:
-    # הפעלת האפליקציה הראשית אם המשתמש מחובר
-    main_app(st.admin)
-
+# הפעלת האפליקציה הראשית ישירות
+main_app(st.session_state.username)
