@@ -12,7 +12,7 @@ import random
 import numpy as np
 from sklearn.linear_model import LinearRegression
 
-# --- 1. הגדרות מערכת ועיצוב ---
+# --- 1. הגדרות מערכת ---
 st.set_page_config(page_title="APEX Terminal", layout="wide", page_icon="💎")
 
 def load_custom_css():
@@ -22,13 +22,12 @@ def load_custom_css():
             .stApp { background-color: #0E1117; color: #E6EDF3; font-family: 'Assistant', sans-serif; direction: rtl; }
             h1, h2, h3 { color: #D4AF37 !important; text-align: right; }
             .stMetric { text-align: right !important; }
-            /* כפתורים מעוצבים */
             .stButton button { width: 100%; border-radius: 8px; font-weight: bold; }
         </style>
     """, unsafe_allow_html=True)
 load_custom_css()
 
-# --- 2. חיבורים (DB & AI) ---
+# --- 2. חיבורים ---
 @st.cache_resource
 def connect_to_db():
     try:
@@ -45,19 +44,15 @@ def get_ai_response(messages, context_data):
         if "GOOGLE_API_KEY" not in st.secrets: return "⚠️ חסר מפתח AI"
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
         model = genai.GenerativeModel('gemini-pro')
-        
-        # הוראה למודל לדבר בעברית ולהסביר כמו מורה
         sys_prompt = f"Context: {context_data}. You are APEX, a professional trading mentor. Explain simply in Hebrew."
         chat_history = [{'role': 'user', 'parts': [sys_prompt]}]
-        
         for m in messages:
             role = 'user' if m['role']=='user' else 'model'
             chat_history.append({'role': role, 'parts': [m['content']]})
-            
         return model.generate_content(chat_history).text
     except Exception as e: return f"Error: {str(e)}"
 
-# --- 3. חישובים ונתונים ---
+# --- 3. נתונים וחישובים ---
 @st.cache_data(ttl=60)
 def get_data(ticker, period, interval):
     try:
@@ -68,33 +63,24 @@ def get_data(ticker, period, interval):
 
 def add_indicators(df):
     if df.empty: return df
-    # RSI
     df['RSI'] = 100 - (100 / (1 + (df['Close'].diff().where(df['Close'].diff()>0, 0).rolling(14).mean() / -df['Close'].diff().where(df['Close'].diff()<0, 0).rolling(14).mean())))
-    # ממוצעים
     df['SMA_50'] = df['Close'].rolling(50).mean()
-    # בולינגר
     df['BB_Upper'] = df['Close'].rolling(20).mean() + (df['Close'].rolling(20).std() * 2)
     df['BB_Lower'] = df['Close'].rolling(20).mean() - (df['Close'].rolling(20).std() * 2)
     return df
 
-# --- 4. פונקציות ליבה ---
 def render_prediction(df):
     if len(df) < 30: return
-    # הכנת נתונים לחיזוי
     df_p = df.copy().reset_index()
     df_p['DateNum'] = df_p['Date'].apply(lambda x: x.toordinal())
     X = df_p[['DateNum']]; y = df_p['Close']
     model = LinearRegression().fit(X, y)
-    
-    # חיזוי
     future_dates = [df_p['Date'].iloc[-1] + timedelta(days=i) for i in range(1, 31)]
     future_X = np.array([d.toordinal() for d in future_dates]).reshape(-1, 1)
     pred = model.predict(future_X)
     
-    # תצוגה
     st.markdown("### 🔮 APEX Vision (צפי מגמה)")
-    st.caption("הקו המקווקו מראה את כיוון המגמה לחודש הקרוב לפי אלגוריתם ליניארי.")
-    
+    st.caption("הקו המקווקו מראה את כיוון המגמה לחודש הקרוב.")
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='מחיר בפועל', line=dict(color='#00C805')))
     fig.add_trace(go.Scatter(x=future_dates, y=pred, name='תחזית מגמה', line=dict(color='#D4AF37', dash='dot')))
@@ -120,17 +106,120 @@ def get_portfolio(u):
         return udf.groupby('symbol').apply(lambda x: pd.Series({'Quantity': x['quantity'].sum(), 'AvgPrice': (x['quantity']*x['price']).sum()/x['quantity'].sum()})).reset_index()
     except: return pd.DataFrame()
 
-# --- 5. האפליקציה הראשית ---
+# --- 4. האפליקציה הראשית ---
 def main_app(username):
-    # סרגל צד חכם
+    # סרגל צד
     with st.sidebar:
         st.title("💎 APEX PRO")
         st.caption(f"מחובר כ: {username}")
         st.markdown("---")
         st.markdown("### 🤖 העוזר האישי")
+        
         if p := st.chat_input("שאל אותי משהו..."):
             with st.spinner("חושב..."):
                 st.info(get_ai_response([{'role':'user', 'content':p}], "General Q&A"))
         
         st.markdown("---")
+        # --- כאן היה התיקון להזחה (Indentation) ---
         with st.expander("❓ מקרא מהיר"):
+            st.write("**RSI:** מד חום למניה. מעל 70=רותח, מתחת ל-30=קפוא.")
+            st.write("**SMA:** הקו הצהוב. אם המחיר מעליו = מגמת עלייה.")
+
+    # לשוניות
+    tabs = st.tabs(["📊 חדר מסחר", "💼 התיק שלי", "📡 סורק הזדמנויות", "🎓 אקדמיה"])
+
+    # --- לשונית 1: חדר מסחר ---
+    with tabs[0]:
+        c1, c2 = st.columns([1,3])
+        ticker = c1.text_input("חפש סימול מניה (למשל TSLA)", "NVDA").upper()
+        
+        if ticker:
+            with st.spinner("מוריד נתונים..."):
+                df, info = get_data(ticker, "1y", "1d")
+            
+            if not df.empty:
+                df = add_indicators(df)
+                last_price = df['Close'].iloc[-1]
+                last_rsi = df['RSI'].iloc[-1]
+                
+                if st.button(f"🤖 נתח לי את {ticker}", type="primary"):
+                    with st.spinner("מנתח..."):
+                        analysis = get_ai_response([{'role':'user', 'content':f"Analyze {ticker}. Price: {last_price}, RSI: {last_rsi}. Hebrew summary."}], "Analysis")
+                        st.success(analysis)
+
+                st.markdown("### נתוני זמן אמת")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("מחיר אחרון", f"${last_price:.2f}")
+                m2.metric("RSI", f"{last_rsi:.1f}", delta_color="inverse" if last_rsi > 70 else "normal")
+                m3.metric("שינוי יומי", f"{df['Close'].pct_change().iloc[-1]*100:.2f}%")
+
+                fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
+                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_50'], line=dict(color='#D4AF37', width=2), name='ממוצע 50'))
+                fig.update_layout(title=f"הגרף של {ticker}", template="plotly_dark", height=500)
+                st.plotly_chart(fig, use_container_width=True)
+                st.divider()
+                render_prediction(df)
+
+    # --- לשונית 2: התיק שלי ---
+    with tabs[1]:
+        st.header("ניהול תיק השקעות")
+        with st.expander("➕ הוסף עסקה חדשה ידנית"):
+            with st.form("trade_form"):
+                c1,c2,c3 = st.columns(3)
+                s = c1.text_input("סימול").upper()
+                q = c2.number_input("כמות", 1)
+                pr = c3.number_input("מחיר קנייה ($)", 0.1)
+                if st.form_submit_button("שמור"): 
+                    if add_trade(username, s, q, pr): st.success("נשמר!"); time.sleep(1); st.rerun()
+        
+        df_p = get_portfolio(username)
+        if not df_p.empty:
+            df_p['CurrentPrice'] = [yf.Ticker(x).fast_info['last_price'] for x in df_p['symbol']]
+            df_p['TotalValue'] = df_p['Quantity'] * df_p['CurrentPrice']
+            df_p['Profit'] = df_p['TotalValue'] - (df_p['Quantity'] * df_p['AvgPrice'])
+            st.dataframe(df_p.style.format({"AvgPrice":"${:.2f}", "CurrentPrice":"${:.2f}", "TotalValue":"${:.2f}", "Profit":"${:.2f}"}), use_container_width=True)
+            st.metric("רווח כולל", f"${df_p['Profit'].sum():,.2f}")
+        else:
+            st.warning("התיק ריק.")
+
+    # --- לשונית 3: סורק ---
+    with tabs[2]:
+        st.header("🔍 סורק השוק")
+        if st.button("הפעל סריקה"):
+            res = []
+            tickers = ["AAPL","TSLA","NVDA","AMZN","GOOGL","MSFT","AMD","META"]
+            prog = st.progress(0)
+            for i, t in enumerate(tickers):
+                try:
+                    d = yf.Ticker(t).history(period="3mo")
+                    if not d.empty:
+                        delta = d['Close'].diff()
+                        up, down = delta.copy(), delta.copy()
+                        up[up < 0] = 0; down[down > 0] = 0
+                        rs = up.ewm(span=14).mean() / down.abs().ewm(span=14).mean()
+                        rsi = 100 - 100 / (1 + rs)
+                        last_rsi = rsi.iloc[-1]
+                        stat = "🔥 רותח" if last_rsi > 70 else "❄️ קפוא" if last_rsi < 30 else "בינוני"
+                        res.append({"מניה":t, "מחיר":f"${d['Close'].iloc[-1]:.2f}", "RSI":f"{last_rsi:.1f}", "סטטוס":stat})
+                except: pass
+                prog.progress((i+1)/len(tickers))
+            st.dataframe(pd.DataFrame(res), use_container_width=True)
+
+    # --- לשונית 4: אקדמיה ---
+    with tabs[3]:
+        st.header("🎓 אקדמיית APEX")
+        st.markdown("כאן לומדים איך לא להפסיד את הכסף.")
+        study_tabs = st.tabs(["📘 מושגי יסוד", "📈 קריאת גרף", "🧠 פסיכולוגיה"])
+        with study_tabs[0]:
+            with st.expander("מה זה שורט (Short)?"):
+                st.write("להרוויח כשמניה יורדת.")
+            with st.expander("מה זה Stop Loss?"):
+                st.error("חגורת בטיחות למניעת הפסדים גדולים.")
+        with study_tabs[1]:
+            st.write("### איך קוראים את הגרף?")
+            st.markdown("1. **נרות יפניים:** ירוק = עליה, אדום = ירידה.\n2. **SMA:** קו המגמה.\n3. **RSI:** מד מומנטום.")
+        with study_tabs[2]:
+            st.warning("אל תסכן יותר מ-1% מהתיק בעסקה אחת.")
+
+# הרצה במצב "עוקף כניסה" (Admin)
+main_app("Admin")
