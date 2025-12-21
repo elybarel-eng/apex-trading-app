@@ -36,10 +36,10 @@ load_custom_css()
 # --- 3. חיבורים (DB & AI) ---
 @st.cache_resource
 def connect_to_db():
-    """חיבור לגוגל שיטס עם טיפול בשגיאות"""
+    """חיבור לגוגל שיטס (עדיין קיים עבור הפורטפוליו)"""
     try:
         if "gcp_service_account" not in st.secrets:
-            st.error("❌ שגיאה: המפתח 'gcp_service_account' חסר בקובץ secrets.toml")
+            # אם אין סודות, לא נכשיל את האפליקציה, רק נחזיר None
             return None
         
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -48,7 +48,8 @@ def connect_to_db():
         client = gspread.authorize(creds)
         return client.open("APEX_Database")
     except Exception as e:
-        st.error(f"❌ שגיאת חיבור לגוגל שיטס: {e}")
+        # הדפסה שקטה לקונסול בלבד, לא למסך המשתמש כדי לא להפריע
+        print(f"DB Error: {e}")
         return None
 
 def get_ai_response(messages, context_data):
@@ -67,7 +68,7 @@ def get_ai_response(messages, context_data):
             
         return model.generate_content(chat_history).text
     except Exception as e:
-        return f"שגיאת AI: {str(e)}"
+        return f"I'm offline right now ({str(e)})"
 
 # --- 4. פונקציות מסחר וניתוח ---
 @st.cache_data(ttl=60)
@@ -117,59 +118,12 @@ def render_prediction(df, ticker):
         fig.update_layout(template="plotly_dark", height=300, margin=dict(t=10,b=10,l=0,r=0))
         st.plotly_chart(fig, use_container_width=True)
 
-# --- 5. ניהול משתמשים (כולל התיקון!) ---
-def make_hashes(p):
-    return hashlib.sha256(str.encode(p)).hexdigest()
-
-def login_user(u, p):
-    """פונקציית התחברות מתוקנת - מטפלת בבעיות המרת סוגי נתונים"""
-    sh = connect_to_db()
-    if not sh: return False
-    try:
-        ws = sh.worksheet("users")
-        records = ws.get_all_records()
-        df = pd.DataFrame(records)
-        
-        if df.empty: return False
-        
-        # --- התיקון הקריטי: המרה לטקסט ---
-        # מוודאים שכל שמות המשתמשים הם טקסט (למקרה שמישהו נרשם עם מספר)
-        df['username'] = df['username'].astype(str)
-        u = str(u).strip() # ניקוי רווחים והמרה לטקסט
-        
-        # חיפוש המשתמש
-        user_row = df[df['username'] == u]
-        if user_row.empty: return False
-        
-        # השוואת סיסמאות
-        stored_pass = str(user_row.iloc[0]['password'])
-        input_pass = make_hashes(p)
-        
-        return stored_pass == input_pass
-    except Exception as e:
-        st.error(f"שגיאת התחברות: {e}")
-        return False
-
-def create_user(u, p):
-    sh = connect_to_db()
-    if not sh: return False
-    try:
-        ws = sh.worksheet("users")
-        # המרה לטקסט גם בבדיקת הכפילויות
-        existing_users = [str(x) for x in ws.col_values(1)]
-        
-        if str(u) in existing_users:
-            return False # המשתמש קיים
-            
-        ws.append_row([str(u), make_hashes(p), str(datetime.now())])
-        return True
-    except Exception as e:
-        st.error(f"שגיאת יצירה: {e}")
-        return False
-
+# --- 5. ניהול פורטפוליו (ללא אימות סיסמה) ---
 def add_trade(u, s, q, p):
     sh = connect_to_db()
-    if not sh: return False
+    if not sh: 
+        st.warning("לא מחובר לדאטהבייס - העסקה לא נשמרה")
+        return False
     try:
         sh.worksheet("trades").append_row([u, s, int(q), float(p), str(datetime.now())])
         return True
@@ -183,17 +137,14 @@ def get_portfolio(u):
         if not records: return pd.DataFrame()
         
         df = pd.DataFrame(records)
-        # סינון לפי שם משתמש (כטקסט)
         df['username'] = df['username'].astype(str)
         udf = df[df['username'] == str(u)].copy()
         
         if udf.empty: return pd.DataFrame()
         
-        # המרות סוגים לחישובים
         udf['quantity'] = pd.to_numeric(udf['quantity'])
         udf['price'] = pd.to_numeric(udf['price'])
         
-        # סיכום לפי מניה
         ptf = udf.groupby('symbol').apply(
             lambda x: pd.Series({
                 'Quantity': x['quantity'].sum(),
@@ -208,7 +159,7 @@ def main_app(username):
     # סרגל צד
     with st.sidebar:
         st.title("💎 APEX PRO")
-        st.caption(f"User: {username}")
+        st.caption(f"User: {username} (Admin Mode)")
         
         with st.expander("💬 AI Chat", expanded=True):
             if "msgs" not in st.session_state: st.session_state.msgs = []
@@ -220,10 +171,6 @@ def main_app(username):
                 r = get_ai_response(st.session_state.msgs, st.session_state.get('ctx', 'General'))
                 st.session_state.msgs.append({"role":"assistant", "content":r})
                 st.rerun()
-                
-        if st.button("LOGOUT", type="primary"):
-            st.session_state.logged_in = False
-            st.rerun()
 
     # לשוניות
     tabs = st.tabs(["📊 Market", "💼 Portfolio", "🕹️ Simulator", "📡 Scanner", "🎓 Academy"])
@@ -255,6 +202,7 @@ def main_app(username):
     # --- PORTFOLIO ---
     with tabs[1]:
         st.header("My Vault")
+        st.info("מחובר כ-Admin. כל העסקאות שתוסיף יישמרו תחת משתמש זה.")
         with st.expander("➕ Add Trade"):
             with st.form("trade"):
                 c1,c2,c3 = st.columns(3)
@@ -266,7 +214,6 @@ def main_app(username):
         
         df_p = get_portfolio(username)
         if not df_p.empty:
-            # הוספת שווי נוכחי
             vals = []
             for sym in df_p['symbol']:
                 try: vals.append(yf.Ticker(sym).fast_info['last_price'])
@@ -277,6 +224,8 @@ def main_app(username):
             
             st.dataframe(df_p.style.format({"AvgPrice":"${:.2f}", "Current":"${:.2f}", "Total Value":"${:.2f}", "Profit":"${:.2f}"}), use_container_width=True)
             st.metric("Total Equity", f"${df_p['Total Value'].sum():,.2f}")
+        else:
+            st.warning("התיק ריק או שאין חיבור לגוגל שיטס")
 
     # --- SIMULATOR ---
     with tabs[2]:
@@ -320,14 +269,12 @@ def main_app(username):
                 try:
                     d = yf.Ticker(t).history(period="3mo")
                     if not d.empty:
-                        # חישוב RSI מהיר
                         delta = d['Close'].diff()
                         up, down = delta.copy(), delta.copy()
                         up[up < 0] = 0
                         down[down > 0] = 0
                         rs = up.ewm(span=14).mean() / down.abs().ewm(span=14).mean()
                         rsi = 100 - 100 / (1 + rs)
-                        
                         r_val = rsi.iloc[-1]
                         stat = "HOT 🔥" if r_val > 70 else "COLD ❄️" if r_val < 30 else "OK"
                         res.append({"Symbol":t, "Price":f"${d['Close'].iloc[-1]:.2f}", "RSI":f"{r_val:.1f}", "Status":stat})
@@ -352,31 +299,10 @@ def main_app(username):
                 st.info(get_ai_response([{'role':'user', 'content':f"Teach me: {q}"}], "Education"))
 
 
-# --- לוגיקת כניסה ---
-if 'logged_in' not in st.session_state: st.session_state.logged_in=False; st.session_state.username=''
+# --- עקיפת מסך הכניסה ---
+# במקום לבקש סיסמה, אנחנו פשוט מגדירים שאתה מחובר כ-Admin
+st.session_state.logged_in = True
+st.session_state.username = "Admin"
 
-if not st.session_state.logged_in:
-    c1,c2,c3 = st.columns([1,2,1])
-    with c2:
-        st.title("💎 APEX LOGIN")
-        t1,t2 = st.tabs(["Login", "Sign Up"])
-        
-        with t1:
-            u = st.text_input("User")
-            p = st.text_input("Password", type="password")
-            if st.button("Enter", use_container_width=True):
-                if login_user(u, p):
-                    st.session_state.logged_in = True
-                    st.session_state.username = str(u)
-                    st.rerun()
-                else: st.error("Wrong user/pass")
-        
-        with t2:
-            nu = st.text_input("New User")
-            np = st.text_input("New Password", type="password")
-            if st.button("Create Account", use_container_width=True):
-                if create_user(nu, np): st.success("Created! Now Login.")
-                else: st.error("User taken")
-
-else:
-    main_app(st.session_state.username)
+# הפעלת האפליקציה ישירות
+main_app(st.session_state.username)
